@@ -4,6 +4,8 @@
  * Copyright (c) 2018 ilammy
  */
 
+#define DEBUG
+
 #define pr_fmt(fmt) "ftrace_hook: " fmt
 
 #include <linux/ftrace.h>
@@ -111,10 +113,18 @@ static void notrace fh_ftrace_thunk(unsigned long ip, unsigned long parent_ip,
 	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
 #if USE_FENTRY_OFFSET
+#ifdef CONFIG_ARM64
+	regs->pc = (unsigned long)hook->function;
+#else
 	regs->ip = (unsigned long)hook->function;
+#endif
 #else
 	if (!within_module(parent_ip, THIS_MODULE))
+#ifdef CONFIG_ARM64
+		regs->pc = (unsigned long)hook->function;
+#else
 		regs->ip = (unsigned long)hook->function;
+#endif
 #endif
 }
 
@@ -132,6 +142,9 @@ int fh_install_hook(struct ftrace_hook *hook)
 	if (err)
 		return err;
 
+
+  pr_debug("address to hook: %s=0x%lx", hook->name, hook->address);
+
 	/*
 	 * We're going to modify %rip register so we'll need IPMODIFY flag
 	 * and SAVE_REGS as its prerequisite. ftrace's anti-recursion guard
@@ -139,13 +152,20 @@ int fh_install_hook(struct ftrace_hook *hook)
 	 * We'll perform our own checks for trace function reentry.
 	 */
 	hook->ops.func = fh_ftrace_thunk;
+
+#ifdef CONFIG_ARM64
+	hook->ops.flags =  FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED
+					| FTRACE_OPS_FL_RECURSION_SAFE
+					| FTRACE_OPS_FL_IPMODIFY;
+#else
 	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
 	                | FTRACE_OPS_FL_RECURSION
 	                | FTRACE_OPS_FL_IPMODIFY;
+#endif
 
-	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+    err = ftrace_set_filter(&hook->ops, (unsigned char *)hook->name, strlen(hook->name), 0);
 	if (err) {
-		pr_debug("ftrace_set_filter_ip() failed: %d\n", err);
+		pr_debug("ftrace_set_filter() failed: %d\n", err);
 		return err;
 	}
 
@@ -172,9 +192,9 @@ void fh_remove_hook(struct ftrace_hook *hook)
 		pr_debug("unregister_ftrace_function() failed: %d\n", err);
 	}
 
-	err = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+	err = ftrace_set_filter(&hook->ops,  NULL, 0, 1);
 	if (err) {
-		pr_debug("ftrace_set_filter_ip() failed: %d\n", err);
+		pr_debug("ftrace_set_filter() failed: %d\n", err);
 	}
 }
 
@@ -221,8 +241,8 @@ void fh_remove_hooks(struct ftrace_hook *hooks, size_t count)
 		fh_remove_hook(&hooks[i]);
 }
 
-#ifndef CONFIG_X86_64
-#error Currently only x86_64 architecture is supported
+#if !defined(CONFIG_X86_64) && !defined(CONFIG_ARM64)
+#error Currently only x86_64 and arm64 architecture are supported
 #endif
 
 #if defined(CONFIG_X86_64) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0))
@@ -341,9 +361,17 @@ static asmlinkage long fh_sys_execve(const char __user *filename,
  * That's what you end up with if an architecture has 3 (three) ABIs for system calls.
  */
 #ifdef PTREGS_SYSCALL_STUBS
-#define SYSCALL_NAME(name) ("__x64_" name)
+# ifdef CONFIG_ARM64
+#  define SYSCALL_NAME(name) ("__arm64_" name)
+# else
+#  define SYSCALL_NAME(name) ("__x64_" name)
+# endif
 #else
-#define SYSCALL_NAME(name) (name)
+# ifdef CONFIG_ARM64
+#  define SYSCALL_NAME(name) ("__arm64_" name)
+# else
+#  define SYSCALL_NAME(name) (name)
+# endif
 #endif
 
 #define HOOK(_name, _function, _original)	\

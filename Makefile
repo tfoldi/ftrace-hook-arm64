@@ -7,3 +7,8 @@ all:
 
 clean:
 	make -C $(KERNEL_PATH) M=$(PWD) clean
+
+test: all
+	sudo insmod *ko
+	sudo dmesg | tail
+	sudo rmmod *ko
